@@ -9,6 +9,7 @@
  * conditions.
  */
 
+#include <dopenssl/platform.h>
 #include <dopenssl/bn.h>
 #include <dopenssl/rand.h>
 
@@ -30,7 +31,13 @@
  *   crypto/bn/bn_prime.h
  *   crypto/bn/bn_prime.c
  *   crypto/bn/bn_rand.c
+ *   crypto/bn/internal.h
  */
+#if defined(DOPENSSL_64_BIT)
+#define BN_MASK2        (0xffffffffffffffffUL)
+#else
+#define BN_MASK2        (0xffffffffUL)
+#endif
 
 #ifndef EIGHT_BIT
 #define NUMPRIMES 2048
@@ -334,7 +341,7 @@ static int dbnrand(int pseudorand, BIGNUM *rnd, int bits, int top, int bottom)
   if (pseudorand)
   {
     assert(RAND_get_rand_method() == &dRAND_method);
-    if (RAND_pseudo_bytes(buf, bytes) == -1)
+    if (RAND_bytes(buf, bytes) == -1)
       goto err;
   }
   else
@@ -355,7 +362,7 @@ static int dbnrand(int pseudorand, BIGNUM *rnd, int bits, int top, int bottom)
     for (i = 0; i < bytes; i++)
     {
       assert(RAND_get_rand_method() == &dRAND_method);
-      RAND_pseudo_bytes(&c, 1);
+      RAND_bytes(&c, 1);
       if (c >= 128 && i > 0)
         buf[i] = buf[i-1];
       else if (c < 42)
@@ -396,7 +403,6 @@ static int dbnrand(int pseudorand, BIGNUM *rnd, int bits, int top, int bottom)
     OPENSSL_cleanse(buf,bytes);
     OPENSSL_free(buf);
   }
-  bn_check_top(rnd);
 
   return(ret);
 }
@@ -407,7 +413,7 @@ int dBN_rand(BIGNUM *rnd, int bits, int top, int bottom)
   return dbnrand(0, rnd, bits, top, bottom);
 }
 
-int dBN_pseudo_rand(BIGNUM *rnd, int bits, int top, int bottom)
+int dBN_rand_bytes(BIGNUM *rnd, int bits, int top, int bottom)
 {
   /* PATCHED[rely on the deterministic version] */
   return dbnrand(1, rnd, bits, top, bottom);
@@ -417,11 +423,11 @@ int dBN_pseudo_rand(BIGNUM *rnd, int bits, int top, int bottom)
 static int dbn_rand_range(int pseudo, BIGNUM *r, const BIGNUM *range)
 {
   /* PATCHED[use our deterministic BN random generator] */
-  int (*bn_rand)(BIGNUM *, int, int, int) = pseudo ? dBN_pseudo_rand : dBN_rand;
+  int (*bn_rand)(BIGNUM *, int, int, int) = pseudo ? dBN_rand_bytes : dBN_rand;
   int n;
   int count = 100;
 
-  if (range->neg || BN_is_zero(range))
+  if (BN_is_negative(range) || BN_is_zero(range))
   {
     BNerr(BN_F_BN_RAND_RANGE, BN_R_INVALID_RANGE);
     return 0;
@@ -477,11 +483,10 @@ static int dbn_rand_range(int pseudo, BIGNUM *r, const BIGNUM *range)
     while (BN_cmp(r, range) >= 0);
   }
 
-  bn_check_top(r);
   return 1;
 }
 
-int dBN_pseudo_rand_range(BIGNUM *r, const BIGNUM *range)
+int dBN_rand_bytes_range(BIGNUM *r, const BIGNUM *range)
 {
   /* PATCHED[rely on the deterministic version] */
   return dbn_rand_range(1, r, range);
@@ -508,7 +513,6 @@ static int witness(BIGNUM *w, const BIGNUM *a, const BIGNUM *a1,
   }
   /* If we get here, 'w' is the (a-1)/2-th power of the original 'w',
    * and it is neither -1 nor +1 -- so 'a' cannot be prime */
-  bn_check_top(w);
   return 1;
 }
 
@@ -549,12 +553,12 @@ int dBN_is_prime_fasttest_ex(const BIGNUM *a, int checks, BN_CTX *ctx_passed,
   BN_CTX_start(ctx);
 
   /* A := abs(a) */
-  if (a->neg)
+  if (BN_is_negative(a))
   {
     BIGNUM *t;
     if ((t = BN_CTX_get(ctx)) == NULL) goto err;
     BN_copy(t, a);
-    t->neg = 0;
+    BN_set_negative(t, 0);
     A = t;
   }
   else
@@ -591,8 +595,8 @@ int dBN_is_prime_fasttest_ex(const BIGNUM *a, int checks, BN_CTX *ctx_passed,
 
   for (i = 0; i < checks; i++)
   {
-    /* PATCHED[use our dBN_pseudo_rand_range()] */
-    if (!dBN_pseudo_rand_range(check, A1))
+    /* PATCHED[use our dBN_rand_bytes_range()] */
+    if (!dBN_rand_bytes_range(check, A1))
       goto err;
     if (!BN_add_word(check, 1))
       goto err;
@@ -657,7 +661,6 @@ static int dprobable_prime_dh(BIGNUM *rnd, int bits,
   ret=1;
   err:
   BN_CTX_end(ctx);
-  bn_check_top(rnd);
   return(ret);
 }
 
@@ -710,7 +713,6 @@ static int dprobable_prime_dh_safe(BIGNUM *p, int bits, const BIGNUM *padd,
   ret=1;
   err:
   BN_CTX_end(ctx);
-  bn_check_top(p);
   return(ret);
 }
 
@@ -741,7 +743,6 @@ static int dprobable_prime(BIGNUM *rnd, int bits)
     }
   }
   if (!BN_add_word(rnd,delta)) return(0);
-  bn_check_top(rnd);
   return(1);
 }
 
@@ -829,7 +830,6 @@ int dBN_generate_prime_ex(BIGNUM *ret, int bits, int safe,
     BN_CTX_end(ctx);
     BN_CTX_free(ctx);
   }
-  bn_check_top(ret);
   return found;
 }
 
