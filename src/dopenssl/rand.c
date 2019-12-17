@@ -38,11 +38,13 @@
 
 #define STATE_SIZE              1023
 
+static CRYPTO_RWLOCK* crypto_rwlock_rand = NULL;
+static CRYPTO_RWLOCK* crypto_rwlock_rand2 = NULL;
 static unsigned int crypto_lock_rand = 0; /* may be set only when a thread
-                                           * holds CRYPTO_LOCK_RAND
+                                           * holds crypto_rwlock_rand
                                            * (to prevent double locking) */
-/* access to lockin_thread is synchronized by CRYPTO_LOCK_RAND2 */
-static CRYPTO_THREADID locking_threadid; /* valid iff crypto_lock_rand is set */
+/* access to lockin_thread is synchronized by crypto_rwlock_rand2 */
+static CRYPTO_THREAD_ID locking_threadid; /* valid iff crypto_lock_rand is set */
 
 static int state_num=0,state_index=0;
 static unsigned char state[STATE_SIZE+MD_DIGEST_LENGTH];
@@ -94,12 +96,12 @@ static void dRAND_cleanup(void)
   }
 }
 
-static void dRAND_add(const void *buf, int num, double add)
+static int dRAND_add(const void *buf, int num, double add)
 {
   int i,j,k,st_idx;
   int md_c[2];
   unsigned char local_md[MD_DIGEST_LENGTH];
-  EVP_MD_CTX m;
+  EVP_MD_CTX *m;
   int do_not_lock;
 
   /*
@@ -120,16 +122,15 @@ static void dRAND_add(const void *buf, int num, double add)
   /* check if we already have the lock */
   if (crypto_lock_rand)
   {
-    CRYPTO_THREADID cur;
-    CRYPTO_THREADID_current(&cur);
-    CRYPTO_r_lock(CRYPTO_LOCK_RAND2);
-    do_not_lock = !CRYPTO_THREADID_cmp(&locking_threadid, &cur);
-    CRYPTO_r_unlock(CRYPTO_LOCK_RAND2);
+    CRYPTO_THREAD_ID cur = CRYPTO_THREAD_get_current_id();
+    CRYPTO_THREAD_read_lock(crypto_rwlock_rand2);
+    do_not_lock = CRYPTO_THREAD_compare_id(locking_threadid, cur);
+    CRYPTO_THREAD_unlock(crypto_rwlock_rand2);
   }
   else
     do_not_lock = 0;
 
-  if (!do_not_lock) CRYPTO_w_lock(CRYPTO_LOCK_RAND);
+  if (!do_not_lock) CRYPTO_THREAD_write_lock(crypto_rwlock_rand);
   st_idx=state_index;
 
   /* use our own copies of the counters so that even
@@ -161,29 +162,29 @@ static void dRAND_add(const void *buf, int num, double add)
 
   md_count[1] += (num / MD_DIGEST_LENGTH) + (num % MD_DIGEST_LENGTH > 0);
 
-  if (!do_not_lock) CRYPTO_w_unlock(CRYPTO_LOCK_RAND);
+  if (!do_not_lock) CRYPTO_THREAD_unlock(crypto_rwlock_rand);
 
-  EVP_MD_CTX_init(&m);
+  m = EVP_MD_CTX_new();
   for (i=0; i<num; i+=MD_DIGEST_LENGTH)
   {
     j=(num-i);
     j=(j > MD_DIGEST_LENGTH)?MD_DIGEST_LENGTH:j;
 
-    MD_Init(&m);
+    MD_Init(m);
 
-    MD_Update(&m,local_md,MD_DIGEST_LENGTH);
+    MD_Update(m,local_md,MD_DIGEST_LENGTH);
 
     k=(st_idx+j)-STATE_SIZE;
     if (k > 0)
     {
-      MD_Update(&m,&(state[st_idx]),j-k);
-      MD_Update(&m,&(state[0]),k);
+      MD_Update(m,&(state[st_idx]),j-k);
+      MD_Update(m,&(state[0]),k);
     }
     else
-      MD_Update(&m,&(state[st_idx]),j);
+      MD_Update(m,&(state[st_idx]),j);
 
     /* DO NOT REMOVE THE FOLLOWING CALL TO MD_Update()! */
-    MD_Update(&m,buf,j);
+    MD_Update(m,buf,j);
     /* We know that line may cause programs such as
        purify and valgrind to complain about use of
        uninitialized data.  The problem is not, it's
@@ -191,8 +192,8 @@ static void dRAND_add(const void *buf, int num, double add)
        sure you get really bad randomness and thereby
        other problems such as very insecure keys. */
 
-    MD_Update(&m,(unsigned char *)&(md_c[0]),sizeof(md_c));
-    MD_Final(&m,local_md);
+    MD_Update(m,(unsigned char *)&(md_c[0]),sizeof(md_c));
+    MD_Final(m,local_md);
     md_c[1]++;
 
     buf=(const char *)buf + j;
@@ -212,9 +213,9 @@ static void dRAND_add(const void *buf, int num, double add)
         st_idx=0;
     }
   }
-  EVP_MD_CTX_cleanup(&m);
+  EVP_MD_CTX_free(m);
 
-  if (!do_not_lock) CRYPTO_w_lock(CRYPTO_LOCK_RAND);
+  if (!do_not_lock) CRYPTO_THREAD_write_lock(crypto_rwlock_rand);
   /* Don't just copy back local_md into md -- this could mean that
    * other thread's seeding remains without effect (except for
    * the incremented counter).  By XORing it we keep at least as
@@ -225,18 +226,21 @@ static void dRAND_add(const void *buf, int num, double add)
   }
   if (entropy < ENTROPY_NEEDED) /* stop counting when we have enough */
     entropy += add;
-  if (!do_not_lock) CRYPTO_w_unlock(CRYPTO_LOCK_RAND);
+  if (!do_not_lock) CRYPTO_THREAD_unlock(crypto_rwlock_rand);
 
 #if !defined(OPENSSL_THREADS) && !defined(OPENSSL_SYS_WIN32)
   assert(md_c[1] == md_count[1]);
 #endif
+
+  return 1;
 }
 
-static void dRAND_seed(const void *buf, int num)
+static int dRAND_seed(const void *buf, int num)
 {
   /* PATCHED[this line is a fix of ssleay_rand_add()] */
   assert(RAND_get_rand_method() == &dRAND_method);
   RAND_add(buf, num, (double)num);
+  return 1;
 }
 
 static int dRAND_bytes(unsigned char *buf, int num)
@@ -246,12 +250,12 @@ static int dRAND_bytes(unsigned char *buf, int num)
   int ok;
   int md_c[2];
   unsigned char local_md[MD_DIGEST_LENGTH];
-  EVP_MD_CTX m;
+  EVP_MD_CTX *m;
 
   if (num <= 0)
     return 1;
 
-  EVP_MD_CTX_init(&m);
+  m = EVP_MD_CTX_new();
   /* round upwards to multiple of MD_DIGEST_LENGTH/2 */
   num_ceil = (1 + (num-1)/(MD_DIGEST_LENGTH/2)) * (MD_DIGEST_LENGTH/2);
 
@@ -273,12 +277,12 @@ static int dRAND_bytes(unsigned char *buf, int num)
    * global 'md'.
    */
 
-  CRYPTO_w_lock(CRYPTO_LOCK_RAND);
+  CRYPTO_THREAD_write_lock(crypto_rwlock_rand);
 
   /* prevent ssleay_rand_bytes() from trying to obtain the lock again */
-  CRYPTO_w_lock(CRYPTO_LOCK_RAND2);
-  CRYPTO_THREADID_current(&locking_threadid);
-  CRYPTO_w_unlock(CRYPTO_LOCK_RAND2);
+  CRYPTO_THREAD_write_lock(crypto_rwlock_rand2);
+  locking_threadid = CRYPTO_THREAD_get_current_id();
+  CRYPTO_THREAD_unlock(crypto_rwlock_rand2);
   crypto_lock_rand = 1;
 
   if (!initialized)
@@ -328,16 +332,16 @@ static int dRAND_bytes(unsigned char *buf, int num)
 
   /* before unlocking, we must clear 'crypto_lock_rand' */
   crypto_lock_rand = 0;
-  CRYPTO_w_unlock(CRYPTO_LOCK_RAND);
+  CRYPTO_THREAD_unlock(crypto_rwlock_rand);
 
   while (num > 0)
   {
     /* num_ceil -= MD_DIGEST_LENGTH/2 */
     j=(num >= MD_DIGEST_LENGTH/2)?MD_DIGEST_LENGTH/2:num;
     num-=j;
-    MD_Init(&m);
-    MD_Update(&m,local_md,MD_DIGEST_LENGTH);
-    MD_Update(&m,(unsigned char *)&(md_c[0]),sizeof(md_c));
+    MD_Init(m);
+    MD_Update(m,local_md,MD_DIGEST_LENGTH);
+    MD_Update(m,(unsigned char *)&(md_c[0]),sizeof(md_c));
 
     /* The following line uses the supplied buffer as a small
      * source of entropy: since this buffer is often uninitialised
@@ -348,17 +352,17 @@ static int dRAND_bytes(unsigned char *buf, int num)
      */
     /* PATCHED[the following line adds undeterminism and has therefore
                been removed]
-       MD_Update(&m,buf,j); */
+       MD_Update(m,buf,j); */
 
     k=(st_idx+MD_DIGEST_LENGTH/2)-st_num;
     if (k > 0)
     {
-      MD_Update(&m,&(state[st_idx]),MD_DIGEST_LENGTH/2-k);
-      MD_Update(&m,&(state[0]),k);
+      MD_Update(m,&(state[st_idx]),MD_DIGEST_LENGTH/2-k);
+      MD_Update(m,&(state[0]),k);
     }
     else
-      MD_Update(&m,&(state[st_idx]),MD_DIGEST_LENGTH/2);
-    MD_Final(&m,local_md);
+      MD_Update(m,&(state[st_idx]),MD_DIGEST_LENGTH/2);
+    MD_Final(m,local_md);
 
     for (i=0; i<MD_DIGEST_LENGTH/2; i++)
     {
@@ -370,20 +374,20 @@ static int dRAND_bytes(unsigned char *buf, int num)
     }
   }
 
-  MD_Init(&m);
-  MD_Update(&m,(unsigned char *)&(md_c[0]),sizeof(md_c));
-  MD_Update(&m,local_md,MD_DIGEST_LENGTH);
-  CRYPTO_w_lock(CRYPTO_LOCK_RAND);
-  MD_Update(&m,md,MD_DIGEST_LENGTH);
-  MD_Final(&m,md);
-  CRYPTO_w_unlock(CRYPTO_LOCK_RAND);
+  MD_Init(m);
+  MD_Update(m,(unsigned char *)&(md_c[0]),sizeof(md_c));
+  MD_Update(m,local_md,MD_DIGEST_LENGTH);
+  CRYPTO_THREAD_write_lock(crypto_rwlock_rand);
+  MD_Update(m,md,MD_DIGEST_LENGTH);
+  MD_Final(m,md);
+  CRYPTO_THREAD_unlock(crypto_rwlock_rand);
 
-  EVP_MD_CTX_cleanup(&m);
+  EVP_MD_CTX_free(m);
   if (ok)
     return(1);
   else
   {
-    RANDerr(RAND_F_SSLEAY_RAND_BYTES,RAND_R_PRNG_NOT_SEEDED);
+    RANDerr(RAND_F_RAND_BYTES,RAND_R_PRNG_NOT_SEEDED);
     ERR_add_error_data(1, "You need to read the OpenSSL FAQ, "
                        "http://www.openssl.org/support/faq.html");
     return(0);
@@ -410,30 +414,29 @@ static int dRAND_pseudorand(unsigned char *buf, int num)
 
 static int dRAND_status(void)
 {
-  CRYPTO_THREADID cur;
   int ret;
   int do_not_lock;
 
-  CRYPTO_THREADID_current(&cur);
+  CRYPTO_THREAD_ID cur = CRYPTO_THREAD_get_current_id();
   /* check if we already have the lock
    * (could happen if a RAND_poll() implementation calls RAND_status()) */
   if (crypto_lock_rand)
   {
-    CRYPTO_r_lock(CRYPTO_LOCK_RAND2);
-    do_not_lock = !CRYPTO_THREADID_cmp(&locking_threadid, &cur);
-    CRYPTO_r_unlock(CRYPTO_LOCK_RAND2);
+    CRYPTO_THREAD_read_lock(crypto_rwlock_rand2);
+    do_not_lock = CRYPTO_THREAD_compare_id(locking_threadid, cur);
+    CRYPTO_THREAD_unlock(crypto_rwlock_rand2);
   }
   else
     do_not_lock = 0;
 
   if (!do_not_lock)
   {
-    CRYPTO_w_lock(CRYPTO_LOCK_RAND);
+    CRYPTO_THREAD_write_lock(crypto_rwlock_rand);
 
     /* prevent ssleay_rand_bytes() from trying to obtain the lock again */
-    CRYPTO_w_lock(CRYPTO_LOCK_RAND2);
-    CRYPTO_THREADID_cpy(&locking_threadid, &cur);
-    CRYPTO_w_unlock(CRYPTO_LOCK_RAND2);
+    CRYPTO_THREAD_write_lock(crypto_rwlock_rand2);
+    locking_threadid = cur;
+    CRYPTO_THREAD_unlock(crypto_rwlock_rand2);
     crypto_lock_rand = 1;
   }
 
@@ -450,7 +453,7 @@ static int dRAND_status(void)
     /* before unlocking, we must clear 'crypto_lock_rand' */
     crypto_lock_rand = 0;
 
-    CRYPTO_w_unlock(CRYPTO_LOCK_RAND);
+    CRYPTO_THREAD_unlock(crypto_rwlock_rand);
   }
 
   return ret;
@@ -493,6 +496,12 @@ int dRAND_init()
     return 0;
   if (ENGINE_init(_engine) == 0)
     return 0;
+  crypto_rwlock_rand = CRYPTO_THREAD_lock_new();
+  if (crypto_rwlock_rand == NULL)
+    return 0;
+  crypto_rwlock_rand2 = CRYPTO_THREAD_lock_new();
+  if (crypto_rwlock_rand2 == NULL)
+    return 0;
   if (ENGINE_set_RAND(_engine, &dRAND_method) == 0)
     return 0;
   if (ENGINE_add(_engine) == 0)
@@ -520,6 +529,12 @@ int dRAND_clean()
   if (ENGINE_free(_engine) == 0)
     return 0;
   ENGINE_cleanup();
+
+  CRYPTO_THREAD_lock_free(crypto_rwlock_rand);
+  crypto_rwlock_rand = NULL;
+
+  CRYPTO_THREAD_lock_free(crypto_rwlock_rand2);
+  crypto_rwlock_rand2 = NULL;
 
   _engine = NULL;
 
@@ -616,23 +631,19 @@ char *dRAND_fingerprint(void)
   char *data = (char*)malloc(MD_DIGEST_LENGTH + 1);
   memset(data, 0x0, MD_DIGEST_LENGTH + 1);
 
-  EVP_MD_CTX ctx;
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
 
-  EVP_MD_CTX_init(&ctx);
+  MD_Update(ctx, &state_num, sizeof (state_num));
+  MD_Update(ctx, &state_index, sizeof (state_index));
+  MD_Update(ctx, &state, sizeof (state));
+  MD_Update(ctx, &md, sizeof (md));
+  MD_Update(ctx, &md_count, sizeof (md_count));
+  MD_Update(ctx, &entropy, sizeof (entropy));
+  MD_Update(ctx, &initialized, sizeof (initialized));
 
-  MD_Init(&ctx);
+  MD_Final(ctx, (unsigned char*)data);
 
-  MD_Update(&ctx, &state_num, sizeof (state_num));
-  MD_Update(&ctx, &state_index, sizeof (state_index));
-  MD_Update(&ctx, &state, sizeof (state));
-  MD_Update(&ctx, &md, sizeof (md));
-  MD_Update(&ctx, &md_count, sizeof (md_count));
-  MD_Update(&ctx, &entropy, sizeof (entropy));
-  MD_Update(&ctx, &initialized, sizeof (initialized));
-
-  MD_Final(&ctx, (unsigned char*)data);
-
-  EVP_MD_CTX_cleanup(&ctx);
+  EVP_MD_CTX_free(ctx);
 
   static char const* alphabet = "0123456789abcdef";
   unsigned int i;
