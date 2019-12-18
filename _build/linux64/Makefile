@@ -36,15 +36,15 @@ check: tests/dopenssl/bn.status tests/dopenssl/rand.status tests/dopenssl/rsa.st
 
 tests/dopenssl/bn: tests/dopenssl/bn.o lib/libdopenssl.so
 	@mkdir -p tests/dopenssl
-	${CC} -L lib -L ${OPENSSL_LIBRARY_DIRECTORY} -Wl,-rpath-link,lib '-Wl,-rpath,$$ORIGIN' '-Wl,-rpath,$$ORIGIN/../../lib' -fprofile-arcs -lgcov --coverage tests/dopenssl/bn.o -o tests/dopenssl/bn -lcrypto -ldopenssl -lssl
+	${CC} -L lib -L ${OPENSSL_LIBRARY_DIRECTORY} -Wl,-rpath-link,lib '-Wl,-rpath,$$ORIGIN' '-Wl,-rpath,$$ORIGIN/../../lib' -fprofile-arcs -lgcov --coverage tests/dopenssl/bn.o -o tests/dopenssl/bn -lcrypto -ldopenssl -lssl -ldl -lpthread
 
 tests/dopenssl/rand: tests/dopenssl/rand.o lib/libdopenssl.so
 	@mkdir -p tests/dopenssl
-	${CC} -L lib -L ${OPENSSL_LIBRARY_DIRECTORY} -Wl,-rpath-link,lib '-Wl,-rpath,$$ORIGIN' '-Wl,-rpath,$$ORIGIN/../../lib' -fprofile-arcs -lgcov --coverage tests/dopenssl/rand.o -o tests/dopenssl/rand -lcrypto -ldopenssl -lssl
+	${CC} -L lib -L ${OPENSSL_LIBRARY_DIRECTORY} -Wl,-rpath-link,lib '-Wl,-rpath,$$ORIGIN' '-Wl,-rpath,$$ORIGIN/../../lib' -fprofile-arcs -lgcov --coverage tests/dopenssl/rand.o -o tests/dopenssl/rand -lcrypto -ldopenssl -lssl -ldl -lpthread
 
 tests/dopenssl/rsa: tests/dopenssl/rsa.o lib/libdopenssl.so
 	@mkdir -p tests/dopenssl
-	${CC} -L lib -L ${OPENSSL_LIBRARY_DIRECTORY} -Wl,-rpath-link,lib '-Wl,-rpath,$$ORIGIN' '-Wl,-rpath,$$ORIGIN/../../lib' -fprofile-arcs -lgcov --coverage tests/dopenssl/rsa.o -o tests/dopenssl/rsa -lcrypto -ldopenssl -lssl
+	${CC} -L lib -L ${OPENSSL_LIBRARY_DIRECTORY} -Wl,-rpath-link,lib '-Wl,-rpath,$$ORIGIN' '-Wl,-rpath,$$ORIGIN/../../lib' -fprofile-arcs -lgcov --coverage tests/dopenssl/rsa.o -o tests/dopenssl/rsa -lcrypto -ldopenssl -lssl -ldl -lpthread
 
 tests/dopenssl/bn.o: ../../tests/dopenssl/bn.c
 	@mkdir -p tests/dopenssl
@@ -72,4 +72,4 @@ tests/dopenssl/bn.status: tests/dopenssl/bn lib/libdopenssl.so
 
 sample:
 	${CC} -Wall -fprofile-arcs -ftest-coverage -fPIC -isystem . -isystem ${OPENSSL_INCLUDE_DIRECTORY} -I ../../src -I src -O2 -c ../../src/sample.c -o src/sample.o
-	${CC} -L lib -L ${OPENSSL_LIBRARY_DIRECTORY} -Wl,-rpath-link,lib '-Wl,-rpath,$$ORIGIN' '-Wl,-rpath,$$ORIGIN/../lib' -fprofile-arcs -lgcov --coverage src/sample.o -o src/sample -lcrypto -ldopenssl -lssl
+	${CC} -L lib -L ${OPENSSL_LIBRARY_DIRECTORY} -Wl,-rpath-link,lib '-Wl,-rpath,$$ORIGIN' '-Wl,-rpath,$$ORIGIN/../lib' -fprofile-arcs -lgcov --coverage src/sample.o -o src/sample -lcrypto -ldopenssl -lssl -ldl -lpthread

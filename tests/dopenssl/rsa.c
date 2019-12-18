@@ -173,7 +173,7 @@ test_deduce()
   EVP_PKEY* key = _test_generate(1024);
   DOPENSSL_CHECK(key != NULL);
 
-  RSA* original = key->pkey.rsa;
+  RSA* original = EVP_PKEY_get0_RSA(key);
   RSA* deduced1 = NULL;
   RSA* deduced2 = NULL;
   RSA* deduced3 = NULL;
@@ -181,7 +181,7 @@ test_deduce()
 
   // Private Deducing 1.
   {
-    deduced1 = dRSA_deduce_privatekey(BN_num_bits(original->n),
+    deduced1 = dRSA_deduce_privatekey(BN_num_bits(RSA_get0_n(original)),
                                       (unsigned char const*)seed,
                                       strlen(seed));
     DOPENSSL_CHECK(deduced1 != NULL);
@@ -189,7 +189,7 @@ test_deduce()
 
   // PrivateKey Deducing 2.
   {
-    deduced2 = dRSA_deduce_privatekey(BN_num_bits(original->n),
+    deduced2 = dRSA_deduce_privatekey(BN_num_bits(RSA_get0_n(original)),
                                       (unsigned char const*)seed,
                                       strlen(seed));
     DOPENSSL_CHECK(deduced2 != NULL);
@@ -197,7 +197,7 @@ test_deduce()
 
   // PublicKey Deducing 3.
   {
-    deduced3 = dRSA_deduce_publickey(deduced1->n,
+    deduced3 = dRSA_deduce_publickey(RSA_get0_n(deduced1),
                                      (unsigned char const*)seed,
                                      strlen(seed));
     DOPENSSL_CHECK(deduced3 != NULL);
@@ -205,7 +205,7 @@ test_deduce()
 
   // PublicKey Deducing 4.
   {
-    deduced4 = dRSA_deduce_publickey(deduced1->n,
+    deduced4 = dRSA_deduce_publickey(RSA_get0_n(deduced1),
                                      (unsigned char const*)seed,
                                      strlen(seed));
     DOPENSSL_CHECK(deduced4 != NULL);
@@ -218,21 +218,21 @@ test_deduce()
   DOPENSSL_CHECK(dRSA_cmp_publickey(deduced2, deduced4) == 0);
   DOPENSSL_CHECK(dRSA_cmp_publickey(deduced3, deduced4) == 0);
 
-  char* n = BN_bn2hex(deduced1->n);
+  char* n = BN_bn2hex(RSA_get0_n(deduced1));
   DOPENSSL_CHECK(n != NULL);
-  char* e = BN_bn2hex(deduced1->e);
+  char* e = BN_bn2hex(RSA_get0_e(deduced1));
   DOPENSSL_CHECK(e != NULL);
-  char* d = BN_bn2hex(deduced1->d);
+  char* d = BN_bn2hex(RSA_get0_d(deduced1));
   DOPENSSL_CHECK(d != NULL);
-  char* p = BN_bn2hex(deduced1->p);
+  char* p = BN_bn2hex(RSA_get0_p(deduced1));
   DOPENSSL_CHECK(p != NULL);
-  char* q = BN_bn2hex(deduced1->q);
+  char* q = BN_bn2hex(RSA_get0_q(deduced1));
   DOPENSSL_CHECK(q != NULL);
-  char* dmp1 = BN_bn2hex(deduced1->dmp1);
+  char* dmp1 = BN_bn2hex(RSA_get0_dmp1(deduced1));
   DOPENSSL_CHECK(dmp1 != NULL);
-  char* dmq1 = BN_bn2hex(deduced1->dmq1);
+  char* dmq1 = BN_bn2hex(RSA_get0_dmq1(deduced1));
   DOPENSSL_CHECK(dmq1 != NULL);
-  char* iqmp = BN_bn2hex(deduced1->iqmp);
+  char* iqmp = BN_bn2hex(RSA_get0_iqmp(deduced1));
   DOPENSSL_CHECK(iqmp != NULL);
 
   DOPENSSL_CHECK(strcmp(n, "D37F7E18E74D26101AA4DB65618C00553D86A25D398D6F112432561EA6BA1DFCA4ECD18AF9958973A56E9EC07222E42F7E84B1625554140AD3E840FFC81BC4BF830D49820A238A2C07846067D796FBD457A6B491B165E022D278D538EA6A197CBE548F6E669E0E7F3F6AA0907D4C5C41BAA80C191297A02A2963C7CC4B877025") == 0);
@@ -282,7 +282,7 @@ test_rotate_and_derive()
 
   EVP_PKEY* key = _test_generate(1024);
 
-  BIGNUM* N = BN_dup(key->pkey.rsa->n);
+  BIGNUM* N = BN_dup(RSA_get0_n(EVP_PKEY_get0_RSA(key)));
 
   // Rotation 1.
   unsigned char* rotated1_seed = NULL;
